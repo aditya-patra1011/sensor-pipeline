@@ -41,8 +41,19 @@ def clean_data(data):
     valid readings (row-wise mean imputation).
     """
     cleaned = data.copy()
-    row_means = np.nanmean(cleaned, axis=1)
 
+
+    #IQR spike removal per sensor
+    for i in range(cleaned.shape[0]):
+        row = cleaned[i]
+        q1 = np.nanpercentile(row, 25)
+        q3 = np.nanpercentile(row, 75)
+        iqr = q3 - q1
+        lower, upper = q1 - 3.0 * iqr, q3 + 3.0 * iqr
+        spike_mask = (row < lower) | (row > upper)
+        cleaned[i, spike_mask] = np.nan
+    # Mean Imputation     
+    row_means = np.nanmean(cleaned, axis=1)
     for i in range(cleaned.shape[0]):
         nan_mask = np.isnan(cleaned[i])
         cleaned[i, nan_mask] = row_means[i]
@@ -56,25 +67,40 @@ def flag_anomalies(data, z_thresh=2.5):
     away from their sensor's own mean. Returns a boolean mask of the
     same shape as `data`, True where a reading is anomalous.
     """
-    mean = data.mean(axis=1, keepdims=True)
-    std = data.std(axis=1, keepdims=True)
+    global_std = data.std()
+    anomaly_mask = np.zeros(data.shape, dtype=bool)
 
-    z_scores = (data - mean) / std
-    return np.abs(z_scores) > z_thresh
+    for i in range(data.shape[0]):
+        row = data[i]
+        sensor_std = row.std()
+        adaptive_thresh = z_thresh * (sensor_std / global_std)
+        adaptive_thresh = np.clip(adaptive_thresh, 2.0, 4.0)
+
+        mean = row.mean()
+        z_scores = np.abs((row - mean) / sensor_std) if sensor_std > 0 else np.zeros_like(row)
+        anomaly_mask[i] = z_scores > adaptive_thresh
+
+    return anomaly_mask
 
 
 def summarize(data, anomaly_mask):
     """
     Print a per-sensor summary: mean, std, and count of anomalies.
     """
-    num_sensors = data.shape[0]
-    for i in range(num_sensors):
-        sensor_mean = data[i].mean()
-        sensor_std = data[i].std()
+    print(f"{'Sensor':<8} {'Mean':>7} {'Std':>7} {'Min':>7} {'Max':>7} {'Anomalies':>10} {'Rate%':>7}")
+    print("-" * 60)
+    for i in range(data.shape[0]):
+        row = data[i]
         anomaly_count = anomaly_mask[i].sum()
+        rate = 100.0 * anomaly_count / len(row)
         print(
-            f"Sensor {i}: mean={sensor_mean:.2f}  "
-            f"std={sensor_std:.2f}  anomalies={anomaly_count}"
+            f"Sensor {i}  "
+            f"{row.mean():>7.2f} "
+            f"{row.std():>7.2f} "
+            f"{row.min():>7.2f} "
+            f"{row.max():>7.2f} "
+            f"{anomaly_count:>10} "
+            f"{rate:>6.1f}%"
         )
 
 
